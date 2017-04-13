@@ -418,12 +418,85 @@ module Molinillo
         debug(depth) { "Requiring nested dependencies (#{nested_dependencies.join(', ')})" }
         nested_dependencies.each do |d|
           activated.add_child_vertex(name_for(d), nil, [name_for(activated_spec)], d)
+          check_dependency_compatibility(name_for(d))
           parent_index = states.size - 1
           parents = @parents_of[d]
           parents << parent_index if parents.empty?
         end
 
         push_state_for_new_requirements(requirements + nested_dependencies)
+      end
+
+      class RequirementIntersection
+        attr_reader :max, :min
+
+        def initialize(operation, version)
+          @op = operation
+          @v = version
+          case operation
+          when "=" then @max = @min = version
+          when "<="
+            @min = nil
+            @max = inc(version)
+          when "<"
+            @min = nil
+            @max = version
+          when ">="
+            @max = nil
+            @min = dec(version)
+          when ">"
+            @max = nil
+            @min = version
+          when "~>"
+            #TODO
+            @max = nil
+            @min = nil
+          else
+            @max = nil
+            @min = nil
+          end
+        end
+
+        def merge!(other)
+          if (max && other.min && max < other.min ||
+              min && other.max && min > other.max)
+          end
+          @min = [other.min, min].compact.max
+          @max = [other.max, max].compact.min
+          self
+        end
+
+        private
+
+        def inc(version)
+          segments = version.segments
+          segments[segments.size - 1] += 1
+          Gem::Version.new segments.join(".")
+        end
+
+        def dec(version)
+          segments = version.segments
+          return version if segments.all?(&:zero?)
+          idx = segments.size - 1
+          until segments[idx] != 0
+            idx -= 1
+          end
+          segments[idx] -= 1
+          Gem::Version.new segments.join(".")
+        end
+      end
+
+      def check_dependency_compatibility(name)
+        vertex = activated.vertex_named(name)
+        requirements = vertex.requirements
+        return if requirements.length <= 1
+        full_reqs = RequirementIntersection.new ">=", Gem::Version.new("0")
+        requirements.each do |gem_dependency|
+          gem_dependency.requirement.requirements.each do |req|
+            new_req = RequirementIntersection.new(*req)
+            full_reqs.merge! new_req
+          end
+        end
       end
 
       def push_state_for_new_requirements(requirements)
